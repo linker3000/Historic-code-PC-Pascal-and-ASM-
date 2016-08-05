@@ -1,0 +1,799 @@
+
+{$V-}
+
+(************************************************************************)
+(*                                                                      *)
+(*    SCREEN.TPU                   Code (C) N. Kendrick, 1988-91        *)
+(*                                                                      *)
+(*    Version 3.02                                                      *)
+(*                                                                      *)
+(*    Author  : N. Kendrick                                             *)
+(*                                                                      *)
+(*    Date    : 23rd July 1992                                          *)
+(*                                                                      *)
+(*    Description:                                                      *)
+(*                                                                      *)
+(*    General screen and keyboard routines                              *)
+(*                                                                      *)
+(*    Description of changes:                                           *)
+(*                                                                      *)
+(*    3.0 29-12-91 MISC.UNI & EDITOR.UNI now incorporated in this unit  *)
+(*                                                                      *)
+(*    3.01 KeyClear now called ClrKbd and written in assembler          *)
+(*         Cursor now written in assembler                              *)
+(*         TextBorder now written in assembler                          *)
+(*         Prompt code rewritten and shortened                          *)
+(*         FWrite now in assembler                                      *)
+(*                                                                      *)
+(*                                                                      *)
+(*    3.02 GetReal rounding mechanism improved                          *)
+(*                                                                      *)
+(*    Released into the Public Domain by N. Kendrick 5th August 2016    *)
+(*                                                                      *)
+(************************************************************************)
+
+Unit Screen;
+
+Interface
+
+Uses Crt,DOS;
+
+Const
+
+  LSHIFT : Byte = 1;
+  RSHIFT : Byte = 2;
+  CTRL   : Byte = 4;
+  ALT    : Byte = 8;
+  NUMLOCK: Byte = 32;
+  INS    : Byte = 128;
+  SCROLL : Byte = 16;
+  CAPS   : Byte = 64;
+
+  VideoEnable = $08;          { Video Signal Enable Bit }
+
+Type
+
+  SS1        = String[1];
+  SCharSet   = Set of char;
+
+Var
+
+  Keystat      : Byte absolute $0000 : $0417;
+  Crtmode      : Byte Absolute $0040 : $0049;
+  Crtwidth     : Byte Absolute $0040 : $004A;
+  CrtAdapter   : Integer Absolute $0040 : $0063; { Current Display Adapter }
+  VideoMode    : Byte Absolute $0040 : $0065;    { Video Port Mode byte    }
+
+  procedure GetString(var S : String ;
+                        Lngth : Integer ;
+                        XP    : Integer ;
+                        YP    : Integer ;
+                        valid : SCharSet;
+                    var esc   : boolean ;
+                        pad   : Char    );
+
+  procedure GetInt (var I : Integer;
+                  Min   : Integer ;
+                  Max   : Integer;
+              var esc   : boolean ;
+                  pad   : Char    );
+
+
+  procedure GetReal (var I : Real;
+                   Min   : Real;
+                   Max   : Real;
+                   DP    : Integer;
+               var esc   : boolean;
+                   pad   : Char);
+
+  Procedure noise( freq,dura : integer); {Generate a noise}
+
+  Procedure beep;                        {Predefined hi-pitch tone}
+
+  Procedure burp;                        {Predefined lo-pitch tone}
+
+  Procedure Cursor(Starting, Ending : Byte);
+
+  Procedure ClrKbd;
+
+  Procedure getspace; {NK: Cursor off, wait for space bar, cursor on and return}
+
+  function  GetKey( var Special : Boolean ) : char;
+
+  Procedure presskey (Mode : Byte);
+
+  Procedure Writec (Msg : String); {Write message and clear to eol}
+
+  Procedure Writelnc (Msg : String); {Write message and clear to eol}
+
+  Procedure select (Message : String; Valid : SCharSet; Var Response : Char);
+
+  Procedure centre (message : String);
+
+  Procedure fwrite(column, row, attrib : integer ; str : String);
+
+  Procedure prompt (What : String; Colours : Integer; Mode : Byte);
+
+  Procedure Abs_Cursor(Var x, y : Integer);
+
+  Procedure Video(Switch : Boolean); {Turn video ON/OFF to avoid 'CheckSnow'}
+
+  Procedure Sprompt (SWhat : String; Colours : Integer; Valid : SCharSet; var response : Char);
+
+  Procedure TextBorder (Border_Colour: Byte) ; {Set border colour}
+
+Implementation
+
+{-----------------------------------------------------------------------------}
+
+Procedure fwrite; Assembler;
+
+asm
+
+           PUSH  DS
+
+           PUSH  DS
+
+           MOV   AX,0040H
+
+           MOV   DS,AX
+           MOV   AL,[0049H]     {Get current video mode}
+
+           CMP   AL,07H         {Is it monochrome???}
+           JNE   @NOTMONO
+
+           MOV   BX,0B000H
+           JMP   @1
+
+@NOTMONO:  MOV   BX,0B800H
+@1:        MOV   ES,BX
+
+           POP   DS
+
+           MOV   AX,Column
+
+           CMP   AX,00
+           JE    @NOGO
+
+           CMP   AX,080         {Check column}
+           JG    @NOGO          {Too high!}
+
+           MOV   AX,Row         {Check row}
+
+           CMP   AX,00
+           JE    @NOGO
+
+           CMP   AX,025
+           JG    @NOGO          {Too high}
+
+           SUB   AX,01          {Convert Row 1 to 24 into 0 to 23}
+
+           MOV   BX,080
+           IMUL  BX             {AX := AL * 80}
+           ADD   AX,Column      {AX now contains start address for write}
+
+           SUB   AX,01          {Adjust column offset}
+
+           SHL   AX,01
+           MOV   DI,AX          {ES:DI = Screen address for write}
+           LDS   SI,Str         {DS:SI = Address of string}
+
+           LODSB                {AL = String length byte}
+
+           MOV  CL,AL
+           SUB  CH,CH           {CX = String length byte}
+
+           MOV  AX,CX
+           SHL  AX,01
+
+           ADD  AX,DI           {AX = Start point + String length}
+
+           CMP  AX,0FA0H        {Will end point be past end of screen?}
+           JLE  @GOFORIT
+
+           MOV  AX,0000         {Off screen - display text at 1,1}
+           MOV  DI,AX
+
+@GOFORIT:
+           MOV  AX,Attrib
+           MOV  AH,AL
+
+@LOOP:     LODSB                {DS:SI into AL}
+           STOSW                {Save Character to screen}
+           LOOP @LOOP
+
+
+@NOGO:
+
+           POP DS
+end;
+
+{-----------------------------------------------------------------------------}
+
+Procedure select;
+
+Var
+
+  X , Y : integer;
+  S     : SS1;
+
+begin
+  X := WhereX;
+  Y := WhereY;
+
+  repeat
+    S := '';
+    Gotoxy(X,Y);
+    write (Message + ' ' + ^H);
+    S := Readkey;
+    Write (S);
+    If (S <> '') then S[1] := upcase(S[1]);
+    if not (S[1] in Valid) then
+    begin
+      Sound (3000);
+      Delay (2);
+      Nosound;
+    end;
+  until (S[1] in Valid) or ((^M in valid) and (S = ''));
+
+  writeln;
+
+  If ((^M in valid) and (S = '')) then Response := ^M else
+    Response := S[1];
+
+end;
+
+{-----------------------------------------------------------------------------}
+
+Procedure prompt;
+
+{
+Displays string 'What' on the screen at line 24 in the colours given
+by 'Colours'. If 'mode' is non-zero then, after displaying the text, the
+cursor is restored to the position it was in before the routine was
+called. If not, it is placed one space after the prompt text. Note,
+the screen colours are restored after this Procedure.
+}
+
+Var
+ Cx,Cy : Byte; {Current position of cursor}
+ C     : Byte;
+
+begin
+
+  Cx := WhereX;   {Save Current cursor position and screen colours}
+  Cy := WhereY;
+  C  := TextAttr;
+
+  Gotoxy(1,24); {Go to bottom of screen}
+
+  TextAttr := Colours;
+
+  Write (What);
+  ClrEol;
+
+  If Mode <> 0 then GotoXY(Cx,CY);
+  TextAttr := C;
+
+end;
+
+
+{-----------------------------------------------------------------------------}
+
+Procedure Sprompt;
+
+{1.1 NK 09-08-89 Modified to preserve screen colours in and out of procedure}
+
+var
+
+ C : Byte; {Colour of screen when procedure entered}
+
+begin
+
+  C := TextAttr;
+
+  Prompt (SWhat,Colours,0);
+
+  TextAttr := Colours;
+
+  Select ('',valid,response);
+
+  TextAttr := C;
+
+end;
+
+{-----------------------------------------------------------------------------}
+
+Procedure centre;
+
+var
+
+  Size       : Byte;
+
+begin
+
+  case crtmode of  {Work out which mode we're in}
+    0,1,4,5 : size := 40;
+    else      size := 80;
+  end;
+
+  gotoxy(round((Size-Ord(Message[0]))/2),wherey);
+  writeln (message);
+
+end;
+
+{-----------------------------------------------------------------------------}
+
+  Procedure noise; {Generate a noise}
+  begin
+    sound(freq);
+    delay(dura);
+    nosound;
+  end;
+
+{----------------------------------------------------------------------------}
+
+  Procedure beep; {Predefined hi-pitch tone}
+  begin
+    Noise (1000,200);
+  end;
+
+{----------------------------------------------------------------------------}
+
+  Procedure burp; {Predefined lo-pitch tone}
+  begin
+    noise (256,200);
+  end;
+
+{----------------------------------------------------------------------------}
+
+  Procedure Cursor; Assembler;
+
+  {Set the starting and ending scan lines for the cursor. }
+  asm
+    MOV      AH,01H
+    MOV      CH,Starting
+    MOV      CL,Ending
+    INT      10H
+  end;
+
+{----------------------------------------------------------------------------}
+
+Procedure ClrKbd ; Assembler;
+asm
+  MOV AX,0C00H
+  INT 21H
+end;
+
+{----------------------------------------------------------------------------}
+
+  Procedure getspace; {NK: Cursor off, wait for space bar, cursor on and return}
+
+  begin
+    ClrKbd; {Flush keyboard buffer}
+    Cursor (255,255); {Get rid of cursor}
+    repeat
+    until (Readkey = ' ');
+    Cursor (6,7); {Restore cursor}
+  end;
+
+{----------------------------------------------------------------------------}
+
+  Function GetKey;
+
+  var ch   : char;
+      quit : boolean;
+
+  begin
+    Special := false;
+    quit := false;
+    repeat
+      if keypressed then
+      begin
+        quit := true;
+        Ch := ReadKey;
+        if ( ch = #27) and keypressed then
+        begin
+          Ch := ReadKey;
+          Special := true;
+        end;
+      end;
+    until quit;
+    getKey := ch;
+  end;
+
+{----------------------------------------------------------------------------}
+
+  Procedure presskey;
+
+  var
+    X, Y : Byte;
+
+  begin
+    If Mode <> 0 then
+    begin {1.1}
+      X := WhereX;  {Save current position}
+      Y := WhereY;
+      Gotoxy(1,24); {Move to bottom of screen}
+      Write ('PRESS A KEY');
+    end;
+
+    Repeat until keypressed; {Wait for a key}
+
+
+    ClrKbd;
+
+    If (Mode <> 0) then
+    begin
+      Gotoxy(1,24);
+      Write ('           ');   {Clear message}
+      Gotoxy(X,y);             {restore cursor position}
+    end;
+  end;
+
+{----------------------------------------------------------------------------}
+
+Procedure Writec;
+
+{1.1 29-12-91 Uses ClrEol}
+
+begin
+  Write (Msg);
+  ClrEol;
+end;
+
+
+{----------------------------------------------------------------------------}
+
+Procedure writelnc;
+
+begin
+  Write(Msg);
+  ClrEol;
+  Writeln;
+end;
+
+{----------------------------------------------------------------------------}
+
+Procedure Abs_Cursor;
+
+{Get Absolute position of Cursor into parameters x,y}
+
+Var
+  Active_Page : Byte Absolute $0040 : $0062; { Current Video Page Index}
+  Crt_Pages   : Array[0..7] Of Integer Absolute $0040 : $0050;
+
+Begin
+  X := Crt_Pages[active_page]; { Get Cursor Position       }
+  Y := Hi(X)+1;                { Y get Row                 }
+  X := Lo(X)+1;                { X gets Col position       }
+End;
+
+{-----------------------------------------------------------------------------}
+
+Procedure Video; {Turn video ON/OFF to avoid 'Snow'}
+
+Begin
+  If (Switch = False) Then
+    Port[CrtAdapter+4] := (VideoMode-VideoEnable)
+  Else Port[CrtAdapter+4] := (VideoMode Or VideoEnable);
+End;
+
+{-----------------------------------------------------------------------------}
+
+Procedure GetString;
+
+var
+
+  LastString : String;
+  TS         : String;
+  P,I,X,Y    : Integer;
+  special    : boolean;
+  quit       : Boolean;
+  Insmode    : boolean;   {NK - Add insert/replace toggle}
+  FirstKey   : Boolean;
+  Ch         : Char;
+
+{----------------------------------------------------------------------------}
+
+begin {Actual editor procedure}
+
+  Laststring := S;
+  Insmode := False; {Start in overwrite mode}
+
+  If (CRTMode = 7) then Cursor (12,13)
+  else
+  Cursor (6,7); {Set normal cursor size}
+
+  If XP = -1 then X := WhereX else X := XP; {1.5}
+  If YP = -1 then Y := WhereY else Y := YP; {1.5}
+
+  GotoXY(X,Y);
+
+  I := Lngth - Length(S);
+  If I < 0 then I := 0;
+  TS[0] := Chr(I);
+  Fillchar(TS[1],I,PAD);
+
+  Write(S,TS); {Show string and length allowed}
+
+  P := 0;
+  esc := false;
+  FirstKey := True;
+  repeat
+    GotoXY(X + P ,Y );                   {Position cursor on start}
+
+    Special := false;
+    quit := false;
+
+    repeat
+      if keypressed then
+      begin
+        quit := true;
+        Ch := ReadKey;
+
+        if ( ch = #0) and keypressed then
+        begin
+          Ch := ReadKey;
+          Special := true;
+        end;
+      end;
+    until quit;
+
+    If (Firstkey) and (not INSmode) and ((Ch in Valid) and (not special)) then
+    begin {User is writing in a new string, so erase all of old one}
+      Fillchar(TS[1],Lngth,PAD);
+      TS[0] := Chr(Lngth); {1.2 NK Bug fix - set length of string correctly}
+      Write (TS);
+      GotoXY(X+P,Y);
+      S := '';
+    end;
+
+    if special then
+    case ch of
+
+      #75     : if P > 0 then          {CRSR LEFT = Move 1 back}
+                  Dec (P)
+                else
+                Noise (3000,2);
+
+      #77     : if P < Length(S) then  {CRSR RIGHT = Move 1 forward}
+                  Inc(P)
+                else
+                Noise(3000,2);
+
+      #82     : begin                    {NK - Toggle insert mode}
+                  Insmode := Not Insmode;
+                  FirstKey := False;
+                  If Insmode then
+                  begin
+                    If (CRTMode = 7) then Cursor (10,13)
+                    else
+                    cursor (4,7); {Set double size cursor}
+                  end
+                  else
+                  begin
+                    If (CRTMode = 7) then cursor (12,13)
+                    else Cursor (6,7); {Set normal cursor size}
+                  end;
+
+                end;
+
+      #83     : if p < length(s) then  {DEL}
+                 begin
+                   Delete(S,P+1,1);
+                   Write(copy(s,p+1,Lngth),Pad);
+                 end;
+
+      #71     : P := 0;                {HOME - go to start of line}
+
+
+      #79     : P := Length(S);        {END - go to end of line}
+
+
+      Else      Noise (3000,2);
+
+    end {Case - key pressed was a 'special'}
+
+    else
+
+    case Ch of
+
+      #27     : begin                 {ESC}
+                  esc  := true;
+                  P    := Length(S);
+                  GotoXY(X + P ,Y );
+                  Write('' :Lngth - P);
+                  exit;
+                 end;
+
+
+      #32..
+      #126,     {NK V1.6}
+      #128..
+      #254    : {A legit character} {NK - Insert/replace modes added}
+                begin
+                  If insmode and (P < Lngth)
+                  and (ch in valid) then       {Insert character}
+                  begin
+                    if Length(S) = Lngth then
+                    Delete(S,Lngth,1);
+                    Inc(P);
+                    Insert(Ch,S,P);
+                    Write(Copy(S,P,Lngth));
+                  end
+                  else                  {Replace character}
+                  If not insmode and (P < Lngth)
+                  and (ch in valid) then
+                  begin
+                    Delete (S,P+1,1);     {Delete current char}
+                    Insert (Ch,S,P+1);    {Replace it with new one}
+                    Write(Copy(S,P+1,Lngth));
+                    Inc(P);         {Move on one}
+                    end
+                    else
+                    Noise (3000,2);
+                  end;
+
+      ^S      : if P > 0 then         {Wordstar back 1 char}
+                  Dec(P)
+                else
+                Noise (3000,2);
+
+      ^D      : if P < Length(S) then  {Wordstar fwd 1 char}
+                  Inc(P)
+                else
+                Noise (3000,2);
+
+      ^A      : P := 0;                {Go to start of line}
+
+      ^F      : P := Length(S);        {Go to end of line}
+
+      ^G      : if P < Length(S) then  {Wordstar delete}
+                begin
+                  Delete(S,P + 1,1);
+                  Write(Copy(S,P + 1,Lngth),Pad);
+                end;
+
+      ^H,#127 : if P > 0 then         {Delete backwards}
+                begin
+                  Delete(S,P,1);
+                  Write(^H,Copy(S,P,Lngth),Pad);
+                  Dec(P);
+                end
+                else
+                Noise (3000,2);
+
+      ^T      : begin                 {Worstar delete to end of line}
+                  I := Length(S) - P;
+                  If I < 0 then I := 0;
+                  TS[0] := chr(I);
+                  fillchar(TS[1],I,PAD);
+                  Write(TS);
+                  Delete(S,P + 1,Lngth);
+                end;
+
+      ^Y      : begin                 {Worstar delete line}
+                  P := 0;
+                  I := Length(S);
+                  TS[0] := chr(I);
+                  fillchar(TS[1],I,PAD);
+                  GotoXY(X + P ,Y );
+                  Write(TS);
+                  Delete(S,1,Lngth);
+                end;
+
+      ^R       : begin                  {Recall last used string}
+                   S := laststring;
+                   I := Lngth - Length(S);
+                   If I < 0 then I := 0;
+                   TS[0] := Chr(I);
+                   fillchar(TS[1],I,PAD);
+                   GotoXY(X ,Y );
+                   Write(S,TS); {Show string and length allowed}
+                   P := 0;
+                   esc := false;
+                 end;
+
+      else if (ch <> ^M) then Noise (3000,2);
+
+    end;  {of case}
+
+    If (P <> 0) then FirstKey := False;
+
+  until (esc) or (ch = ^M);
+
+  P := Length(S);
+  GotoXY(X + P  ,Y );
+  Write('' :Lngth - P );
+  laststring := S;
+
+  If (CRTMode = 7) then Cursor (12,13)
+  else
+  cursor (6,7); {Set normal cursor size}
+
+end;
+
+{-----------------------------------------------------------------------------}
+
+Procedure GetInt;
+Var
+  S    : String;
+  X,Y  : Integer;
+  Err  : Integer;
+  Temp : Real;
+  L1,L2: String;
+  L    : Integer;
+
+begin
+  X := WhereX; {Save current position}
+  Y := WhereY;
+    repeat
+
+    Str(Max,L1);
+    Str(Min,L2);
+
+    L := Length(L1);
+    If Length(L2) > L then L := length(L2);
+
+    If (Max > -1) and (Min > -1) then Inc(L);
+
+    If (I <> 0) then Str (I,S) else S := '';  {Convert I into a string}
+
+    GetString(S,L,X,Y,['0'..'9','-','+'],esc,pad);
+
+    If S = '' then S := '0';
+
+    if not esc then Val (S,Temp,Err); {1.7}
+
+  until esc or (Err = 0) and (Temp>=Min) and (Temp<=Max);
+
+  I := Round (temp);
+end;
+
+{-----------------------------------------------------------------------------}
+
+Procedure GetReal;
+Var
+  S      : String;
+  X,Y    : Integer;
+  Err,P  : Integer;
+  Temp   : Real;
+  J      : Integer;
+Begin
+  X := whereX; {Save current position}
+  Y := whereY;
+  repeat
+    If (I <> 0.0) then Str (I:0:DP,S) else S := '';  {Convert I into a string}
+    GetString(S,20,X,Y,['0'..'9','.','E','e','+','-'],esc,pad);
+    If S = '' then S := '0.0';
+    If not esc then
+    begin
+
+      P := Pos ('.',S); {Find out position of decimal point}
+
+      If ((Pos('e',S) = 0) and (Pos('E',S) = 0)) then
+        If (Length(S) - P) > DP then S := Copy (S,1,P+DP);
+
+      Val (S,Temp,Err);
+
+    end;
+
+  until esc or ((Err = 0) and ((Temp>=Min) and (Temp<=Max)));
+  I := Temp;
+End;
+
+{-----------------------------------------------------------------------------}
+
+Procedure Textborder; Assembler;
+asm
+  MOV   AH,0BH
+  MOV   BH,00H
+  MOV   BL,Border_Colour
+  INT   10H
+end;
+
+
+end. {Of unit}
+
+{$V+}

@@ -1,0 +1,374 @@
+(************************************************************************)
+(*  File name : DISK2.UNI       Code (C) N. Kendrick, December 1991     *)
+(*                                                                      *)
+(*  Version : 1.02                                                      *)
+(*                                                                      *)
+(*  Date    : 17th June 1992                                            *)
+(*                                                                      *)
+(*  Author  : N. Kendrick                                               *)
+(*                                                                      *)
+(*  Revisions:                                                          *)
+(*                                                                      *)
+(*  1.00 New version of DIR makes use of Turbo 6 disk routines          *)
+(*  1.01 FileCopy now uses block commands and buffer on heap            *)
+(*  1.01 Default_Drive now in assembler                                 *)
+(*  1.02 Variable 'DirInfo' now declared as global 'GV_Dirinfo'         *)
+(*       because it was found that if this variable was declared        *)
+(*       as a local variable, it became corrupted if non-disk I/O       *)
+(*       operations were performed whilst it was in use (ie: pausing    *)
+(*       for a keypress during a directory listing}                     *)
+(*                                                                      *)
+(*  Description :                                                       *)
+(*                                                                      *)
+(*  Procedures and functions related to floppy/hard disks.              *)
+(*                                                                      *)
+(*    Released into the Public Domain by N. Kendrick 5th August 2016    *)
+(************************************************************************)
+
+{$A+ Word Align Data}
+{$B- Short boolean evaluation}
+{$R- No range checking}
+{$S- No stack checking}
+{$V- No string checking}
+
+Unit Disk2;
+
+Interface
+
+Uses
+  DOS,
+  CRT, CharTool;
+
+Const
+
+  F_Valid : Set of char = [' '..')','+'..';','=','@'..'~'];
+
+  D_Valid : Set of char = [' '..')','+'..';','=','@'..'~','*','?'];
+
+{This set holds all the characters valid in a DOS filename}
+
+Type
+
+DS5  = String[5];
+DS9  = String[9];
+DS10 = String[10];
+
+DTARec =
+  Record {Define a Disk Transfer Address}
+    Reserved  : Array [1..21] of char; {Reserved for DOS - Do not touch!}
+    Attr : Byte;                  {File attribute}
+    Time : LongInt;               {Packed Time and Date}
+    Size : LongInt;               {Packed file size}
+    Name : Array[1..13] of Char   {Packed name}
+  end;
+
+Var
+
+  GV_DirInfo  : SearchRec;
+
+
+Procedure GetDTA (Var Segment, Offset, Error : Integer ); {Return current DTA}
+Procedure SetDTA (Segment, Offset : Integer; Var Error : integer);  {Set DTA}
+Procedure Dir (    Func      : Integer  ;
+               var Asczname  : String   ;
+               var matchname : String   ;
+                   Option    : Integer  ;
+               var size      : LongInt  ;
+               var date      : DS10     ;
+               var time      : DS5      ;
+               var attribute : Integer  ;
+               var Error     : Integer );
+
+Function Default_drive : Char; {Returns current default drive as A, B etc..}
+
+procedure Del( S : String; E : Integer);
+
+procedure ren(a,b:string ; E : Integer);
+
+Function exist (S : String) : Boolean;
+
+Procedure Filecopy (Source,Dest : String; Mode : Integer; Var Err : Integer);
+
+{-----------------------------------------------------------------------------}
+
+Implementation
+
+{-----------------------------------------------------------------------------}
+
+Function Exist;
+
+
+Var E : Byte;
+    I : File;
+begin
+
+  Assign (I,S);
+
+  {$I-}
+  Reset (I);
+  E := IoResult;
+  If (E = 0) then Close (I);
+  Exist := (E = 0);
+  {$I+}
+end;
+
+{-----------------------------------------------------------------------------}
+Procedure GetDTA; {Read the current Disk Transfer Address }
+
+VAR
+
+   Regs : registers;
+
+Begin
+    Regs.ax := $2F00;      { Function call $2F - Get current DTA}
+    Intr($21,Registers(Regs));
+    Segment := Regs.es;
+    Offset  := Regs.bx;
+    Error   := Regs.ax and $FF;
+end;
+
+{-----------------------------------------------------------------------------}
+
+Procedure SetDTA; {Set Disk Transfer Address}
+
+(*
+In order to read disk information, the DISK TRANSFER ADDRESS is first set
+to point to a variable of type DTARec. The results of the DOS calls
+to find the first and next matching directory entries are found in
+this variable.
+
+The DTA record structure is defined at the start of this unit as follows:
+
+  DTARec =
+    Record {Define a Disk Transfer Address}
+      Reserved  : Array [1..21] of char; {Reserved for DOS - Do not touch!}
+      Attr : Byte;                  {File attribute}
+      Time : LongInt;               {Packed Time and Date}
+      Size : LongInt;               {Packed file size}
+      Name : Array[1..13] of Char   {Packed name}
+    end;
+
+In order to set the DTA, use the following syntax:
+
+Var
+
+  OurDTA : DTARec;
+
+Then make the following call BEFORE any USER-WRITTEN disk read operations,
+except for DIR below which automatically does this because it uses
+the FINDFIRST and FINDNEXT functions
+
+
+    SetDTA (Seg(OurDTA), Ofs(OurDTA),Error);
+
+NB: Turbo Pascal's FINDFIRST and FINDNEXT routines automatically set the
+    DTA address before they are called.
+
+NB: Turbo Pascal's predefined DTA record structure 'SEARCHREC' is very
+    similar to the record type above, except that the 'Name' variable is
+    defined as 'STRING[12]' for easier use. This is not strictly correct
+    since the packed name is actually an ASCIIZ array of characters
+    (an array terminated by CHR(0)) to a maximum length of 13 characters.
+
+    The Pascal routines FINDFIRST and FINDNEXT automatically convert the
+    packed name into a string but it is important NOT to use Turbo Pascal's
+    record type with any USER-WRITTEN routines.
+*)
+
+VAR
+
+   Regs : registers;
+
+Begin
+  Regs.ax := $1A00;        {Function call $2F - Set current DTA}
+  Regs.ds := Segment;
+  Regs.dx := Offset;
+  Intr($21,Dos.Registers(Regs));
+  Error := Regs.ax and $FF;
+End;
+
+{----------------------------------------------------------------------------}
+
+procedure Dir;
+
+{   Dir gets the first/next directory entry of a particular file mask.    }
+{   Also reads directories and volume info                                }
+{                                                                         }
+{ Func       : 0 = Search for first match, 1+ = search for subsequent ones}
+{                                                                         }
+{ Asczname   : Filespec to match in search                                }
+{                                                                         }
+{ Matchname  : This returns the name of the found matching file/dir entry }
+{                                                                         }
+{ Option     : 08 = volume read                                           }
+{              16 = directores read                                       }
+{              00 = standard files read                                   }
+{              63 = All files read (Files and directory entries)          }
+{                                                                         }
+{  Size      : Returns size of file as a LONGINT                          }
+{                                                                         }
+{  Date      : Returns date of file creation as a STRING[10]              }
+{                                                                         }
+{  Time      : Returns time of file creation as a STRING[5]               }
+{                                                                         }
+{  Attribute : Returns attribute byte of file                             }
+{                                                                         }
+{  Error     : Returns non-zero if no more matching files found or        }
+{              if any problems encountered                                }
+{                                                                         }
+{-------------------------------------------------------------------------}
+
+Var
+
+  T        : String[10];
+  DTPack   : DateTime; {DOS date/time record}
+
+Begin
+
+  If Func = 0 then
+    FindFirst (AsczName,Option,GV_DirInfo)
+  else
+    FindNext  (GV_DirInfo);
+
+  MatchName := GV_DirInfo.Name;
+  Size      := GV_DirInfo.Size;  {Pick up file size as a LongInt}
+  Attribute := GV_DirInfo.Attr;  {Get attribute of file}
+  Error     := DOSError;      {Get DOS Error code. 18 = No more files}
+
+  {Work out time & date of file creation}
+
+  Unpacktime(GV_DirInfo.Time,DTPack); {process time & date attributes}
+
+  With DTPack do
+  begin
+    Str (Year,Date);   {Convert year to a string}
+    Date := IntToStr(Day,2) + '-' + IntToStr(Month,2) + '-' + Date;
+    Time := IntToStr(Hour,2) + ':' + IntToStr(Min,2);
+  end;
+
+End;
+
+{-----------------------------------------------------------------------------}
+{ Return current default drive as an upper case letter                       }
+{----------------------------------------------------------------------------}
+
+Function Default_Drive;
+begin
+  asm
+        MOV     AX,1900H
+        INT     21H
+        ADD     AL,65
+        MOV     @RESULT,AL
+  end;
+end;
+{----------------------------------------------------------------------------}
+{Delete a disk file (If it exists) }
+{----------------------------------------------------------------------------}
+
+procedure del;
+var
+
+ X : File;
+
+begin
+  assign(x,s);
+
+  {$I-} erase(x); {$I+}
+  E := Ioresult;
+
+end;
+
+{----------------------------------------------------------------------------}
+{Rename a disk file (If it exists) }
+{----------------------------------------------------------------------------}
+
+procedure ren;
+var
+
+ x : file;
+
+begin
+  assign(x,a);
+
+  {$I-} rename(x,b) {$I+} ;
+  E := IoResult
+end;
+
+{----------------------------------------------------------------------------}
+
+Procedure FileCopy;
+
+{
+ This procedure copies the source file to the dest file. The copy buffer
+ is dynamically created on the heap
+
+ Returns ERR as:
+
+ 0 : Copy OK
+ 1 : Dest exists and Copy mode was 0 for no overwrite
+ 2 : Error opening source/Dest file
+ 3 : Error opening dest file
+ 4 : Disk full during copy
+
+}
+
+Type
+
+  Buffer = Array [1..1] of Byte;
+
+var
+
+  Sourcefile, Destfile : File;
+  Recordsread          : Word;
+  Recordswritten       : Word;
+  BufSize              : Word;
+  BufPtr               : ^Buffer;
+
+Begin
+
+  Err := 0;
+
+  If Exist(Dest) and (Mode = 0) then Err := 1 {Don't overwrite existing file}
+  else
+  begin
+    Assign (SourceFile,Source);
+    {$I-}
+    Reset (SourceFile,1);
+    {$I+}
+    If IoResult <> 0 Then Err := 2
+    else
+    Begin
+      Assign (DestFile,Dest);
+      {$I-}
+      Rewrite (DestFile,1);
+      {$I+}
+      If IoResult <> 0 Then Err := 3
+      Else
+      Begin
+
+        If MaxAvail < 65531 then BufSize := MaxAvail
+        else
+        BufSize := 65531; {Find max size for buffer}
+
+        GetMem (BufPtr,BufSize); {Allocate the memory}
+
+        Repeat
+          BlockRead  (SourceFile,BufPtr^,BufSize,RecordsRead);
+          BlockWrite (DestFile  ,BufPtr^,RecordsRead,RecordsWritten);
+        Until (RecordsRead = 0) or (RecordsWritten <> RecordsRead);
+
+        Close (SourceFile);
+        Close (DestFile);
+
+        FreeMem (BufPtr,BufSize);
+
+        If (RecordsWritten <> RecordsRead) then Err := 4; {Disk Full?}
+
+      end;
+    end;
+  end;
+end;
+
+{$V+}
+
+end. {Of unit}

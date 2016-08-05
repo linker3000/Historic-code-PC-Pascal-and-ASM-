@@ -1,0 +1,352 @@
+(************************************************************************)
+(*                                                                      *)
+(*     CHRONO.UNI                  Code (C) N. Kendrick, September 1987 *)
+(*                                                                      *)
+(*     Unit Version : 1.2                                               *)
+(*                                                                      *)
+(*     Date of last change : 27-12-91                                   *)
+(*                                                                      *)
+(*     Last change(s) : Addition of ClockOn and ClockOff                *)
+(*                                                                      *)
+(*     This library contains functions and utilities to do with time    *)
+(*     management.                                                      *)
+(*                                                                      *)
+(*   --NAME--   -TYPE- --DESCRIPTION--                   --Vers--       *)
+(*                                                                      *)
+(*    DAYNO      -P-   Converts date into integer          1.3          *)
+(*    NODAY      -P-   Converts integer back to date       1.0          *)
+(*    TimeToLong -F-   Converts H:M:S:100 to a LongInt     1.0          *)
+(*    LongToTime -P-   Converts LongInt to H:M:S:100       1.0          *)
+(*    ClockOn    -P-   Starts the benchmark timer          1.0          *)
+(*    ClockOff   -P-   Stops the benchmark timer           1.0          *)
+(*    Systime    -F-   Returns system time as HH:MM:SS     1.0          *)
+(*    Sysdate    -F-   Returns system date as dd/MM/YY     1.0          *)
+(*                                                                      *)
+(*                                                                      *)
+(*    IMPORTANT                                                         *)
+(*    ~~~~~~~~~                                                         *)
+(*    Released into the Public Domain by N. Kendrick 5th August 2016    *)
+(*                                                                      *)
+(************************************************************************)
+
+Unit Chrono;
+
+Interface
+
+Uses DOS,CRT;
+
+Const
+
+Weekday : Array [0..6] of String[9] =
+           ('Sunday','Monday','Tuesday','Wednesday',
+            'Thursday','Friday','Saturday');
+
+days_in_month : array [0..13] of byte =
+                                 (0,31,28,31,30,31,30,31,31,30,31,30,31,0);
+
+month : array [0..13] of string[3] =
+
+            ('XXX','JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC','XXX');
+
+Type
+
+  DS3 = String[3];
+  CSt11 = String[11];
+
+
+Var
+
+  Benchmark_H,
+  Benchmark_M,
+  Benchmark_S,
+  Benchmark_S100 : Word;
+
+  StartClock,
+  StopClock      : Real;
+
+Function  Dayno ( DDate : integer;
+                  DMonth: DS3;
+                  DYear : Integer) : integer;
+
+Function  noday ( nn : Integer) : CSt11;
+
+Function  TimeToLong (H,M,S,T : Word) : Longint;
+
+Procedure LongToTime (L : LongInt; var H,M,S,T : Word);
+
+Procedure ClockOn;
+
+Procedure ClockOff;
+
+Function  systime (Mode : Byte) : CSt11;
+
+Function  sysdate : CSt11;
+
+{-----------------------------------------------------------------------------}
+
+Implementation
+
+Function Dayno;
+
+Type
+
+  S3 = String[3];
+
+var
+
+DI        : integer;
+Dnum      : integer;
+DDone     : boolean;
+DMonthNo  : Integer;
+
+begin
+
+  dayno    := 0;
+  DI       := 0;
+  DDone    := false;
+  DMonthNo := 0;
+
+  If Dyear = 0 then Dyear := 2000;
+
+  If Dyear < 86 then Dyear := Dyear + 2000 else
+  If Dyear < 99 then Dyear := Dyear + 1900;
+
+  {Validate day entered - but first put month entered into upper case}
+
+  for DI := 1 to 3 do DMonth[DI] := upcase(DMonth[DI]);
+
+  if (DYear mod 4) = 0 then days_in_month[2] := 29 else days_in_month[2] := 28; {Leap yr?}
+
+  DI    := 0;
+
+  repeat  {Find month??}
+    DI := DI + 1;
+  until (month[DI] = DMonth) or (DI = 13);
+
+  DMonthNo := DI;
+
+  if (DDate > days_in_month[DI]) or (DI = 13)
+  or (DYear < 1986) or (DYear >2074) then DDate := 0; {Illegal date}
+
+  If DDate <> 0 then {OK...}
+  begin
+
+    Dnum := 0;
+
+    if DYear > 1986 then for DI := 1986 to DYear-1 do
+    begin  {Add whole years to dayno}
+      Dnum := Dnum + 365; {add a year}
+      if (DI mod 4) = 0 then Dnum := Dnum + 1; {Plus an extra one for a leap year}
+    end;
+
+    {Now add on remainder of days to bring us up to entered date}
+
+    DI    := 0;
+    If DmonthNo <> 1 then
+    For DI := 1 to DmonthNo-1 do Dnum := Dnum + days_in_month[DI];
+
+  end;
+
+  If (DDate <> 0) then Dayno := (Dnum + DDate) else Dayno := -1;
+
+end;
+
+{-----------------------------------------------------------------------------}
+
+Function NoDay;
+Type
+
+  S11 = String[11];
+
+var
+
+no_str1   : S11;
+no_str2   : S11;
+no_sub    : integer;
+no_year   : integer;
+no_month  : integer;
+no_number : Integer;
+
+begin
+  No_Number := nn; {So we don't alter passed parameter}
+  if (no_number <= 0) then NoDay  := '' else
+  begin
+    no_year := 1986;
+    no_str1 := '';
+
+    repeat {Take off successive years until we get a negative result, then backtrack 1 year}
+
+      if (no_year mod 4) = 0 then no_sub := 366 else no_sub := 365;
+
+      no_number := no_number - no_sub; {take off a year}
+
+      no_year := no_year + 1; {increased for every whole year we can take off}
+
+    until (no_number < 0);
+
+    no_year := no_year - 1;
+    no_number := no_number + no_sub;
+
+    {Now start taking off individual months}
+
+    if (no_year mod 4) = 0 then days_in_month[2] := 29
+                           else days_in_month[2] := 28;
+
+    no_month := 1; {Reset month counter}
+
+    repeat
+      no_number := no_number - days_in_month[no_month];
+      no_month := no_month + 1;
+    until (no_number <= 0);
+
+    no_month := no_month - 1;
+
+    no_number := no_number + days_in_month[no_month];
+
+    if no_number = 0 then begin
+      no_month := no_month - 1;
+      if no_month = 0 then begin {We've wrapped round into next year by mistake}
+        no_month := 12;
+        no_year := no_year - 1;
+      end;
+      no_number := days_in_month[no_month];
+    end;
+
+    str(no_number,no_str1);
+    if no_number < 10 then no_str1 := '0' + no_str1;
+    no_str1 := no_str1 + ' ' + month[no_month] + ' ';
+
+    str(no_year,no_str2);
+
+    NoDay := no_str1 + no_str2;
+
+  end;
+end;
+
+{-----------------------------------------------------------------------------}
+
+Function TimeToLong;
+
+Var
+  TH,TM,TS : Longint;
+begin
+  TH:= H;
+  TM:= M;
+  TS:= S;
+  TimeToLong := T + (100 * TS) + (6000 * TM) + (360000 * TH);
+end;
+
+{-----------------------------------------------------------------------------}
+
+Procedure LongToTime;
+Var
+
+ TH, TM,TS : Longint;
+
+begin
+
+ TH := (L Div 360000);
+
+ L := L - TH * 360000;
+
+ TM := (L Div 6000);
+
+ L := L - (TM * 6000);
+
+ TS := (L Div 100);
+
+ L := L - (TS * 100);
+
+ H := TH;
+ M := TM;
+ S := TS;
+ T := L;
+
+end;
+
+{-----------------------------------------------------------------------------}
+
+
+Procedure ClockOn;
+Begin
+  GetTime (Benchmark_H,Benchmark_M,Benchmark_S,Benchmark_S100);
+  StartClock := (Benchmark_H * 3600) + (Benchmark_M * 60) +
+                (Benchmark_S)        + (Benchmark_S100/100);
+End;
+
+{-----------------------------------------------------------------------------}
+
+Procedure ClockOff;
+Var CH : Char;
+
+Begin
+  GetTime (Benchmark_H,Benchmark_M,Benchmark_S,Benchmark_S100);
+  StopClock := (Benchmark_H * 3600) + (Benchmark_M * 60) +
+               (Benchmark_S)        + (Benchmark_S100/100);
+  Writeln ('Elapsed Time = ',(StopClock-StartClock):0:2);
+
+  Write   ('Press a key ');
+  Repeat until keypressed;
+  Writeln;
+  While KeyPressed do Ch := Readkey;
+End;
+
+{-----------------------------------------------------------------------------}
+
+Function Systime;
+
+Var H,M,S,SS : Word;
+    S0,S1 : CSt11;
+
+begin
+  Gettime (H,M,S,SS);
+
+  Str(H,S0);
+  Str (M,S1);
+
+  If Length (S1) = 1 then S1 := '0'+S1;
+
+  S0 := S0 + ':' + S1;                    {Hour + Minutes}
+
+  If Mode > 0 then                        {Mode 1 = HH:MM:SS}
+  begin
+    Str (S,S1);
+    If Length (S1) = 1 then S1 := '0'+S1;
+    S0 := S0 + ':' + S1;
+
+    If Mode > 1 then                      {MODE 2 = HH:MM:SS.TT}
+    begin
+      Str (SS,S1);
+      If Length (S1) = 1 then S1 := '0'+S1;
+      S0 := S0 + '.' + S1;
+    end;
+  end;
+
+  Systime := S0;
+end;
+
+{----------------------------------------------------------------------------}
+
+Function Sysdate;
+
+Var D,M,Y,DD: Word;
+    S0,S1 : CSt11;
+
+begin
+  GetDate (Y,M,D,DD);
+
+  Str(D,S0);
+  Str (M,S1);
+
+  If Length (S1) = 1 then S1 := '0'+S1;
+
+  S0 := S0 + '/' + S1;
+
+  Str (Y,S1);
+  If Length (S1) = 1 then S1 := '0'+S1;
+  S0 := S0 + '/' + S1;
+
+  SysDate := S0;
+end;
+
+end. {Of Unit}

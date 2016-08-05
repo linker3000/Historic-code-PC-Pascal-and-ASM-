@@ -1,0 +1,237 @@
+; QT - The qute time program
+;
+; Version: 1.1 
+;
+; Date: 19th August 1990 
+;
+; The source code is written for the 'A86' assembler
+;
+; Author: Nigel Kendrick
+;
+; Code inspired by the original from Jim Button
+;
+; V1.1 - Code tightened (size reduced by 34 bytes)
+;
+; Released into the Public Domain by N. Kendrick 5th August 2016    *)
+
+
+	JMP	START
+
+;Here comes the data.....
+
+OCLOCK:  DB	 ' O''clock'
+
+CRLF:	 DB	 '.', 0DH, 0AH, 0AH
+
+BLANK:	 DB	 '$'
+
+ITS:	 DB	 0DH, 0AH, 'It''s $'
+
+NUMBERS: DB	 'one$' 
+TWO:     DB	 'two$'
+THREE: 	 DB	 'three$'
+FOUR:  	 DB	 'four$'
+FIVE:	 DB	 'five$'
+SIX:     DB	 'six$'
+SEVEN: 	 DB	 'seven$'
+EIGHT: 	 DB	 'eight$'
+NINE: 	 DB	 'nine$'
+TEN:	 DB	 'ten$'
+ELEVEN:	 DB	 'eleven$'
+TWELVE:  DB	 'twelve$'      
+
+NUMOFF:  DB       0
+	 DB       TWO    - NUMBERS
+	 DB       THREE  - NUMBERS
+	 DB       FOUR   - NUMBERS
+	 DB       FIVE   - NUMBERS
+	 DB       SIX    - NUMBERS
+	 DB       SEVEN  - NUMBERS
+	 DB       EIGHT  - NUMBERS
+	 DB       NINE   - NUMBERS
+	 DB       TEN    - NUMBERS
+	 DB       ELEVEN - NUMBERS
+	 DB       TWELVE - NUMBERS
+
+JGONE:	 DB	 'just'
+PAST:    DB      ' past $' 
+JAFTER:  DB	 'just after $'
+NEARLY:  DB	 'nearly $'
+ALMOST:  DB	 'almost $'                           
+
+OFF2:   DB 	0
+	DB	JAFTER - JGONE
+   	DB	NEARLY - JGONE
+	DB	ALMOST - JGONE
+ 
+TO:	 DB	 ' to $'
+
+QUARTER: DB	 'a quarter$'
+TWENTY:  DB	 'twenty$'
+TFIVE:	 DB	 'twenty-five$'
+HALF:	 DB	 'half$'
+
+START:	PUSH	DS	;Play safe and save everything in sight!!
+	PUSH	BX
+	PUSH	CX
+	PUSH	DX
+
+	MOV	AX,CS	; Data Segment = Code Segment
+	MOV	DS,AX
+
+;******************************************************************************
+;*									      *
+;*		      Get the time from DOS				      *
+;*									      *
+;******************************************************************************
+
+	MOV	AH,2CH	;Set up DOS call to get the current time
+	INT	21H	;And go get it!
+
+;******************************************************************************
+;*									      *
+;*		      Work out if we can say O'clock                          *
+;*									      *
+;******************************************************************************
+
+	CMP	DH,1EH	;DH holds the seconds, is it 30??
+	JS	NORND	;What we're doing is rounding up
+	INC	CL	;to the nearest whole minute
+
+NORND:	CMP	CL,21H	;Is minutes equal to 33?
+	JS	HPAST	;What we're doing is working out whether the time
+	INC	CH	;can be expressed as n minutes past the hour or
+			;n minutes to the hour
+
+HPAST:	MOV	BX,OFFSET OCLOCK       ;Point to o'clock message
+	CMP	CL,00H		;Is the time on the hour at 00 minutes
+	JZ	HNZ
+	CMP	CL,60D		;Or is it at 60 minutes??
+	JZ	HNZ
+	MOV	BX,OFFSET CRLF	;Point to LF codes
+
+HNZ:	PUSH	BX		;Save this part of message
+
+;******************************************************************************
+;*									      *
+;*		      Work out the hour 				      *
+;*									      *
+;******************************************************************************
+
+	MOV	BL,CH		;Move the hour into BL
+	CMP	BL,13D		;Is it 13 or over
+	JS	UND13		;No, so leave it...
+	SUB	BL,12D		;Yes it is, so subtract 12
+UND13:	CMP	BL,00H		;Is it 0 (Midnight)
+	JNZ	NOTMID		;No!
+	MOV	BL,12D		;Yes, so make it 12
+
+NOTMID:	MOV	BH,00H		
+        MOV     AH,00H
+        MOV     AL, B[BX + ((OFFSET NUMOFF) - 1)]        ; Get value from table
+        ADD     AX, OFFSET NUMBERS ; Add base address of numbers
+	PUSH	AX	   	   ; And save address for later
+
+;******************************************************************************
+;*									      *
+;*		      'Past' 'to' or nothing??				      *
+;*									      *
+;******************************************************************************
+
+	MOV	BX,OFFSET BLANK ;Start by assuming print a blank
+
+	CMP	CL,03H		;Check...         
+	JS	SKMIN           ;... up to 3 minutes past the hour??
+	CMP	CL,3AH		;Check...
+	JNS	SKMIN           ;... up to 58 minutes to the hour
+	MOV	BX,OFFSET PAST	;Assume 'past'
+	CMP	CL,21H		;Unless...
+	JS	SKMIN           ;...minutes at 33 or greater
+	MOV	BX,OFFSET TO	;Point to 'to'
+
+SKMIN:	PUSH	BX		;Save 'past' or 'to' pointer
+
+;******************************************************************************
+;*									      *
+;*   'five' 'ten' 'quarter' twenty-five'.....                                 *
+;*									      *
+;******************************************************************************
+
+
+	MOV	AL,CL		;Move minutes into AL
+	CMP	AL,1EH		;Are minutes at 31+?
+	JS	UND30           ;No, they're under 
+	MOV	BL,AL		;
+	MOV	AL,3CH		;Get minutes into range 0-30
+	SUB	AL,BL		;by subtracting 30 from them, if necessary
+
+UND30:	MOV	BX,OFFSET BLANK ;Start by assuming print a blank
+	CMP	AL,02H		;is minutes at 2
+	JBE	DUNMIN
+	MOV	BX,OFFSET FIVE	;Point to where 'five' starts
+	CMP	AL,07H
+	JBE	DUNMIN
+	MOV	BX,OFFSET TEN	;Point to where 'ten' starts
+	CMP	AL,0CH
+	JBE	DUNMIN
+	MOV	BX,OFFSET QUARTER ;Point to where 'a quarter' starts
+	CMP	AL,11H
+	JBE	DUNMIN
+	MOV	BX,OFFSET TWENTY  ;Point to where 'twenty' starts
+	CMP	AL,16H
+	JBE	DUNMIN
+	MOV	BX,OFFSET TFIVE ;Point to where 'twenty-five' starts
+	CMP	AL,1BH
+	JBE	DUNMIN
+	MOV	BX,OFFSET HALF	;Point to where 'half' starts
+
+DUNMIN: PUSH	BX		;Save pointer to minute messages
+
+;******************************************************************************
+;*									      *
+;*	 'Nearly' 'Almost' 'Just' etc...				      *
+;*									      *
+;******************************************************************************
+
+	MOV	AL,CL		;Lets see is we can say 'nearly' 'almost' etc..
+	MOV	AH,00H
+	MOV     BL,05H
+        DIV     BL
+	MOV	BX, OFFSET BLANK
+
+; After division, AL contains quotient, AH contains remainder
+
+	CMP	AH,00H                ; exact division??
+	JE	DUNMESS               ; Yes!
+
+ 	MOV	BH,00	
+ 	MOV	BL,AH
+ 	MOV	AH,BH		; Get offset to start of correct phrase
+	
+	MOV	AL, B[BX + ((OFFSET OFF2) - 1)]
+	ADD	AX,OFFSET JGONE ;Add 'start of table' address to offset 
+	MOV	BX,AX
+DUNMESS:
+	PUSH	BX
+
+;******************************************************************************
+;*									      *
+;*	 Add start message 'Its'					      *
+;*									      *
+;******************************************************************************
+
+	MOV	BX,OFFSET ITS	;Point to it's
+	PUSH	BX
+
+	MOV	CX,06H		;Number of parts to the message
+
+ROUND:	POP	DX		;Get back a message pointer...
+	MOV	AH,09H		;Stand by for a print
+	INT	21H
+	LOOP	ROUND		;Loop for printout 'CX' times
+
+	POP	DX
+	POP	CX
+	POP	BX
+	MOV	AX,04C00	;Return to DOS
+	INT	21H

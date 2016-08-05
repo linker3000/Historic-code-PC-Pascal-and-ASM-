@@ -1,0 +1,203 @@
+Unit CharTool;
+
+{$A+ Word Align Data}
+{$B- Short boolean evaluation}
+{$I- No I/O checking}
+{$R- No range checking}
+{$S- No stack checking}
+{$V- No string checking}
+
+(************************************************************************)
+(*                                                                      *)
+(* Code (C) N. Kendrick 1987-1991                                       *)
+(*                                                                      *)
+(* A compendium of string and character utilities                       *)
+(*                                                                      *)
+(* Version 1.02                                                         *)
+(*                                                                      *)
+(* Date for this version : 29-12-91                                     *)
+(*                                                                      *)
+(* Revisions                                                            *)
+(*                                                                      *)
+(* 1.01 Chartool created to hold all string manipulation routines       *)
+(*      previously found in MISC.UNI (no longer exists and some of the  *)
+(*      routines from SCREEN.UNI                                        *)
+(*                                                                      *)
+(* 1.02 UpString replaced with asm version                              *)
+(*                                                                      *)
+(*    Released into the Public Domain by N. Kendrick 5th August 2016    *)
+(************************************************************************)
+
+
+Interface
+
+Uses CRT, Screen;
+
+
+Const
+
+  AscName : Array [0..31] of String[3] =
+
+  ('NUL','SOH','STX','ETX','EOT','ENQ','ACK','BEL',' BS','TAB',' LF',
+   ' VT',' FF',' CR',' SO',' SI','DLE','DC1','DC2','DC3','DC4','NAK',
+   'SYN','ETB','CAN',' EM','SUB','ESC',' FS',' GS',' RS',' US');
+
+Type
+
+  Cset = Set of Char;
+
+  Str3 = String[3];
+
+Function  Upstring ( Str : String ) : String;
+
+Procedure Strip(var ss : String; BB : CSet );
+
+Procedure tail(var SS : String; BB : Cset );
+
+Function  Crypt (K1,K2 : Integer; S : String) : String;
+
+Function  IntToStr (I : Integer; Pad : Byte) : String;
+
+Procedure UpMove (Source,Dest : Word; Count : Byte);
+
+{Source and Dest are OFFSETS to the source/Dest Data. Count is the number
+ of bytes/characters to move
+}
+
+Function Asc (I : Word) : Str3;
+
+Implementation
+
+{----------------------------------------------------------------------------}
+
+Function Asc;
+
+Var
+
+  S : Str3;
+
+Begin
+
+  I := I and $FF;
+
+  If I in [7..12] then
+    S := AscName[I]
+  else
+  S := Chr(I);
+
+  Asc := S;
+
+end;
+
+{----------------------------------------------------------------------------}
+
+Procedure Strip;
+
+begin
+    While ( ss[1] in BB) and (Length (SS) > 0) do delete(ss,1,1);
+end;
+
+{----------------------------------------------------------------------------}
+
+Procedure Tail;
+begin
+  While (ss[Length(SS)] in BB) and (Length(SS) > 0) do delete (SS,Length(SS),1);
+end;
+
+{----------------------------------------------------------------------------}
+
+Function Crypt;
+
+Var I  : Integer;
+    TS : String;
+
+begin
+  TS := '';
+  For I := 1 to length (S) do
+  TS := TS + Chr ((Ord(S[I]) Xor K2) xor K1);
+  Crypt := TS;
+end;
+
+{----------------------------------------------------------------------------}
+
+Function IntToStr;
+
+Var S : String;
+
+Begin
+  Str (I,S);
+  While Length(S) < Pad do S := '0' + S;
+  IntToStr := S;
+end;
+
+{-----------------------------------------------------------------------------}
+
+Procedure UpMove; Assembler;
+
+{A VERY quick and dirty way of moving a string from one variable to
+ another and converting it to upper case as well
+
+ The Calling parameters are :
+
+ The Offset to the source variable or a position within the source variable
+
+ The Offset to the destination variable
+
+ The number of bytes to move
+
+ NB: No Range checking is performed!!!!
+
+}
+
+asm
+        MOV     SI,Dest         {SI = Dest Pointer}
+        XOR     BH,BH           {BH := 0}
+        MOV     DI,Source       {DI = Source Pointer}
+        MOV     BL,Count        {Loop counter etc}
+        MOV     [SI],BL         {Set Dest String length = Count}
+
+        INC     SI              {Bump Pointer to start of string proper}
+
+@@1:    MOV     AH,[BX+DI]      {Get Character from Source}
+        CMP     AH,'a'          {Is character}
+        JB      @@2             {Within}
+        CMP     AH,'z'          {the}
+        JA      @@2             {range a..z??}
+        SUB     AH,20H          {If so, turn it to upper case}
+@@2:    MOV     [BX+SI],AH      {Save data}
+        DEC     BL
+        JGE     @@1
+
+end;
+
+{----------------------------------------------------------------------------}
+
+Function Upstring ; Assembler;
+
+asm
+        PUSH    DS
+        CLD
+        LDS     SI,STR
+        LES     DI,@RESULT
+        LODSB
+        STOSB
+        XOR     AH,AH
+        XCHG    AX,CX
+        JCXZ    @3
+@1:     LODSB
+        CMP     AL,'a'
+        JB      @2
+        CMP     AL,'z'
+        JA      @2
+        SUB     AL,20H
+@2:
+        STOSB
+        LOOP    @1
+@3:
+        POP     DS
+end;
+
+{----------------------------------------------------------------------------}
+
+
+End. {Implementation}
