@@ -12,7 +12,7 @@
 ;
 ; V1.1 - Code tightened (size reduced by 34 bytes)
 ;
-; Released into the Public Domain by N. Kendrick 5th August 2016    *)
+; Released into the Public Domain by N. Kendrick 5th August 2016  
 
 
 	JMP	START
