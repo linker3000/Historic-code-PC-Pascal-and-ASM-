@@ -8,4 +8,4 @@ This is stuff I wrote or modified from other sources in the 1980s and 1990s. It 
 
 * QT - the 'Qute Time' MSDOS program that displays the current time in words. Modified from the original code written by the late, great Jim Button. ASM86.
 
-More to come, but don't get too excited! Everything here is released into the public domain. No support or guarantees that the code is complete.
+More to come, but don't get too excited! Everything of mine is released into the public domain. Stuff created by others may be shareware or have other licences. No support or guarantees that the code is complete.
